@@ -1,7 +1,6 @@
 use crate::transport::dfu_uuids::*;
 use crate::transport::DfuTransport;
 
-use async_trait::async_trait;
 use btleplug::api::{Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::Adapter;
 use btleplug::platform::Peripheral;
@@ -49,7 +48,6 @@ pub struct DfuTransportBtleplug {
     data_point: Characteristic,
 }
 
-#[async_trait]
 impl DfuTransport for &DfuTransportBtleplug {
     async fn mtu(&self) -> usize {
         // TODO fix once btleplug supports MTU lookup
