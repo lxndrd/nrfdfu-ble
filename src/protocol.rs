@@ -2,6 +2,7 @@ use crate::transport::DfuTransport;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::error::Error;
+use std::io::{self, Write};
 
 // As defined in nRF5_SDK_17.1.0_ddde560/components/libraries/bootloader/dfu/nrf_dfu_req_handler.h
 
@@ -182,10 +183,13 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
             target.write_data(shard).await?;
             target.verify_crc(offset, checksum).await?;
             // TODO add progress callback
-            println!("Uploaded {}/{} bytes", offset, fw_pkt.len());
+            let percent = (offset * 100) / fw_pkt.len();
+            print!("Uploaded {}% ({}/{} bytes)\r", percent, offset, fw_pkt.len());
+            io::stdout().flush().unwrap();
         }
         target.execute().await?;
     }
+    println!();
 
     Ok(())
 }
