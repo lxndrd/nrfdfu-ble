@@ -22,8 +22,21 @@ pub mod dfu_uuids {
 pub trait DfuTransport {
     /// MTU of the BLE link
     async fn mtu(&self) -> usize;
+    /// Connect to the device with the given name
+    async fn connect(&mut self, name: &str) -> Result<(), Box<dyn Error>>;
+    /// Write without response
+    async fn write(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<(), Box<dyn Error>>;
+    /// Subscribe to the given characteristic
+    async fn subscribe(&self, char: uuid::Uuid) -> Result<(), Box<dyn Error>>;
+    /// Write with response then wait for notification response
+    async fn request(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+
     /// Send data to data point
-    async fn write_data(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>>;
+    async fn write_data(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+        self.write(dfu_uuids::DATA_PT, bytes).await
+    }
     /// Exchange request with control point
-    async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+    async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        self.request(dfu_uuids::CTRL_PT, bytes).await
+    }
 }

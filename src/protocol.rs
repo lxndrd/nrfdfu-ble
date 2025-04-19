@@ -1,4 +1,5 @@
-use crate::transport::DfuTransport;
+use crate::transport::dfu_uuids::BTTNLSS;
+use crate::transport::{self, DfuTransport};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::error::Error;
@@ -60,7 +61,7 @@ struct DfuTarget<'a, T: DfuTransport> {
     transport: &'a T,
 }
 
-impl<'a, T: DfuTransport> DfuTarget<'a, T> {
+impl<T: DfuTransport> DfuTarget<'_, T> {
     fn verify_header(opcode: u8, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         if bytes.len() < 3 {
             return Err("invalid response length".into());
@@ -73,7 +74,7 @@ impl<'a, T: DfuTransport> DfuTarget<'a, T> {
         }
         let result = ResponseCode::try_from(bytes[2])?;
         if result != ResponseCode::Success {
-            return Err(format!("{:?}", result).into());
+            return Err(format!("Dfu Target: {:?} ({:?})", result, bytes).into());
         }
         Ok(())
     }
@@ -161,7 +162,11 @@ impl<'a, T: DfuTransport> DfuTarget<'a, T> {
 /// Run DFU procedure as specified in
 /// [DFU Protocol](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html)
 pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<(), Box<dyn Error>> {
+    // TODO: put timeouts on transport operations
     let target = DfuTarget { transport };
+    target.transport.subscribe(transport::dfu_uuids::CTRL_PT).await?;
+
+    // Disable packet receipt notifications
     target.set_prn(0).await?;
 
     target.create_object(Object::Command, init_pkt.len()).await?;
@@ -192,4 +197,12 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
     println!();
 
     Ok(())
+}
+
+/// Trigger DFU mode using the Buttonless DFU service
+pub async fn dfu_trigger(transport: &impl DfuTransport) -> Result<(), Box<dyn Error>> {
+    transport.subscribe(transport::dfu_uuids::BTTNLSS).await?;
+    let res = transport.request(BTTNLSS, &[0x01]).await?;
+    assert_eq!(res, [0x20, 0x01, 0x01]);
+    todo!()
 }
