@@ -1,28 +1,65 @@
 use crate::transport::DfuTransport;
 
-use btleplug::api::{Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
+use btleplug::api::{
+    BDAddr, Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
+    WriteType,
+};
 use btleplug::platform::Adapter;
 use btleplug::platform::Peripheral;
 use futures::stream::StreamExt;
 use std::error::Error;
+use std::io::Write;
+use std::str::FromStr;
 
-async fn find_peripheral_by_name(central: &Adapter, name: &str) -> Result<Peripheral, Box<dyn Error>> {
-    println!("Searching for {} ...", name);
+async fn find_peripheral<P>(central: &Adapter, predicate: P) -> Result<Peripheral, Box<dyn Error>>
+where
+    P: Fn(PeripheralProperties) -> bool,
+{
     central.start_scan(ScanFilter::default()).await?;
     let mut events = central.events().await?;
     while let Some(event) = events.next().await {
         if let CentralEvent::DeviceDiscovered(id) = event {
-            let local_name = central.peripheral(&id).await?.properties().await?.unwrap().local_name;
-            if let Some(n) = local_name {
-                println!("Found [{}] at [{}]", n, id);
-                if n == name {
+            let peripheral = central.peripheral(&id).await?;
+            if let Some(properties) = peripheral.properties().await? {
+                if predicate(properties) {
                     central.stop_scan().await?;
-                    return Ok(central.peripheral(&id).await?);
+                    return Ok(peripheral);
                 }
             }
         }
     }
-    Err("unexpected end of stream".into())
+    Err("Scanning stopped unexpectedly".into())
+}
+
+fn print_peripheral_properties(properties: &PeripheralProperties) {
+    let name = properties.local_name.as_deref().unwrap_or("None");
+    let addr = properties.address;
+    let rssi = properties.rssi.unwrap_or(-99);
+    print!("rssi: {}, address: {}, name: {: <32}\r", rssi, addr, name);
+    std::io::stdout().flush().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+async fn find_peripheral_by_address(_central: &Adapter, _addr: &BDAddr) -> Result<Peripheral, Box<dyn Error>> {
+    Err("BLE MAC addresses are not supported on macOS".into())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn find_peripheral_by_address(central: &Adapter, addr: &BDAddr) -> Result<Peripheral, Box<dyn Error>> {
+    println!("Searching for {} by address...", addr);
+    find_peripheral(central, |props| {
+        print_peripheral_properties(&props);
+        props.address_type.is_some() && props.address.eq(addr)
+    })
+    .await
+}
+async fn find_peripheral_by_name(central: &Adapter, name: &str) -> Result<Peripheral, Box<dyn Error>> {
+    println!("Searching for {} by name...", name);
+    find_peripheral(central, |props| {
+        print_peripheral_properties(&props);
+        props.local_name.is_some() && props.local_name.unwrap().eq(name)
+    })
+    .await
 }
 
 pub struct DfuTransportBtleplug {
@@ -53,7 +90,14 @@ impl DfuTransport for &mut DfuTransportBtleplug {
         let adapters = manager.adapters().await?;
         let central = adapters.into_iter().next().unwrap();
 
-        let peripheral = find_peripheral_by_name(&central, name).await?;
+        let peripheral;
+        if let Ok(addr) = BDAddr::from_str(name) {
+            peripheral = find_peripheral_by_address(&central, &addr).await?;
+        } else {
+            peripheral = find_peripheral_by_name(&central, name).await?;
+        }
+        println!();
+
         peripheral.connect().await?;
         peripheral.discover_services().await?;
 
