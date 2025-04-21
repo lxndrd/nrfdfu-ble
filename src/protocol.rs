@@ -203,6 +203,9 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
 pub async fn dfu_trigger(transport: &impl DfuTransport) -> Result<(), Box<dyn Error>> {
     transport.subscribe(transport::dfu_uuids::BTTNLSS).await?;
     let res = transport.request(BTTNLSS, &[0x01]).await?;
-    assert_eq!(res, [0x20, 0x01, 0x01]);
-    todo!()
+    if res.eq(&[0x20, 0x01, 0x01]) {
+        Ok(())
+    } else {
+        Err("DFU trigger failed".into())
+    }
 }
