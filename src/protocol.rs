@@ -1,9 +1,10 @@
-use crate::transport::dfu_uuids::BTTNLSS;
-use crate::transport::{self, DfuTransport};
+use crate::transport::DfuTransport;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::error::Error;
 use std::io::{self, Write};
+use std::time::Duration;
+use tokio::time::timeout;
 
 // As defined in nRF5_SDK_17.1.0_ddde560/components/libraries/bootloader/dfu/nrf_dfu_req_handler.h
 
@@ -80,23 +81,18 @@ impl<T: DfuTransport> DfuTarget<'_, T> {
     }
 
     async fn write_data(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
-        self.transport.write_data(bytes).await
+        for chunk in bytes.chunks(self.transport.mtu().await) {
+            let write = self.transport.write(dfu_uuids::DATA_PT, chunk);
+            timeout(Duration::from_millis(500), write).await??;
+        }
+        Ok(())
     }
 
     async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         for _retry in 0..3 {
-            match self.transport.request_ctrl(bytes).await {
-                Err(e) => {
-                    if e.is::<tokio::time::error::Elapsed>() {
-                        // response timed out, retry
-                        continue;
-                    } else {
-                        return Err(e);
-                    }
-                }
-                Ok(r) => {
-                    return Ok(r);
-                }
+            let request = self.transport.request(dfu_uuids::CTRL_PT, bytes);
+            if let Ok(res) = timeout(Duration::from_millis(500), request).await {
+                return res;
             }
         }
         Err("No response after multiple tries".into())
@@ -162,9 +158,10 @@ impl<T: DfuTransport> DfuTarget<'_, T> {
 /// Run DFU procedure as specified in
 /// [DFU Protocol](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html)
 pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<(), Box<dyn Error>> {
+    let start = std::time::Instant::now();
     // TODO: put timeouts on transport operations
     let target = DfuTarget { transport };
-    target.transport.subscribe(transport::dfu_uuids::CTRL_PT).await?;
+    target.transport.subscribe(dfu_uuids::CTRL_PT).await?;
 
     // Disable packet receipt notifications
     target.set_prn(0).await?;
@@ -182,7 +179,7 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
     let mut offset: usize = 0;
     for chunk in fw_pkt.chunks(max_size) {
         target.create_object(Object::Data, chunk.len()).await?;
-        for shard in chunk.chunks(transport.mtu().await) {
+        for shard in chunk.chunks(max_size / 4) {
             checksum = crc32(shard, checksum);
             offset += shard.len();
             target.write_data(shard).await?;
@@ -195,17 +192,37 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
         target.execute().await?;
     }
     println!();
+    println!("DFU completed in {:.2} seconds", start.elapsed().as_secs_f32());
 
     Ok(())
 }
 
 /// Trigger DFU mode using the Buttonless DFU service
 pub async fn dfu_trigger(transport: &impl DfuTransport) -> Result<(), Box<dyn Error>> {
-    transport.subscribe(transport::dfu_uuids::BTTNLSS).await?;
-    let res = transport.request(BTTNLSS, &[0x01]).await?;
+    transport.subscribe(dfu_uuids::BTTNLSS).await?;
+    let res = transport.request(dfu_uuids::BTTNLSS, &[0x01]).await?;
     if res.eq(&[0x20, 0x01, 0x01]) {
         Ok(())
     } else {
         Err("DFU trigger failed".into())
     }
+}
+
+/// nRF DFU service & characteristic UUIDs
+///
+/// from [DFU BLE Service](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/group__nrf__dfu__ble.html)
+/// and [Buttonless DFU Service](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/service_dfu.html)
+#[allow(dead_code)]
+mod dfu_uuids {
+    use uuid::Uuid;
+    /// DFU Service (16 bit UUID 0xFE59)
+    pub const SERVICE: Uuid = Uuid::from_u128(0x0000FE59_0000_1000_8000_00805F9B34FB);
+    /// Control Point Characteristic
+    pub const CTRL_PT: Uuid = Uuid::from_u128(0x8EC90001_F315_4F60_9FB8_838830DAEA50);
+    /// Data Characteristic
+    pub const DATA_PT: Uuid = Uuid::from_u128(0x8EC90002_F315_4F60_9FB8_838830DAEA50);
+    /// Buttonless DFU trigger without bonds Characteristic
+    pub const BTTNLSS: Uuid = Uuid::from_u128(0x8EC90003_F315_4F60_9FB8_838830DAEA50);
+    /// Buttonless DFU trigger with bonds Characteristic
+    pub const BTTNLSS_WITH_BONDS: Uuid = Uuid::from_u128(0x8EC90004_F315_4F60_9FB8_838830DAEA50);
 }
