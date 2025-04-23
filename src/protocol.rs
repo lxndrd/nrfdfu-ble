@@ -81,11 +81,8 @@ impl<T: DfuTransport> DfuTarget<'_, T> {
     }
 
     async fn write_data(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
-        for chunk in bytes.chunks(self.transport.mtu().await) {
-            let write = self.transport.write(dfu_uuids::DATA_PT, chunk);
-            timeout(Duration::from_millis(500), write).await??;
-        }
-        Ok(())
+        let write = self.transport.write(dfu_uuids::DATA_PT, bytes);
+        timeout(Duration::from_millis(500), write).await?
     }
 
     async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {

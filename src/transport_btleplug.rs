@@ -111,14 +111,15 @@ impl DfuTransport for &mut DfuTransportBtleplug {
     }
     async fn write(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         let char = self.characteristic(char)?;
-        self.peripheral()
-            .write(&char, bytes, WriteType::WithoutResponse)
-            .await?;
+        // TODO: fix this once btleplug supports MTU discovery
+        // default nRF DFU MTU is 244
+        const MTU: usize = 244;
+        for chunk in bytes.chunks(MTU) {
+            self.peripheral()
+                .write(&char, chunk, WriteType::WithoutResponse)
+                .await?;
+        }
         Ok(())
-    }
-    async fn mtu(&self) -> usize {
-        // TODO: btleplug doesn't support MTU discovery
-        244
     }
     async fn request(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut notifications = self.peripheral().notifications().await.unwrap();

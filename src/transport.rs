@@ -2,8 +2,6 @@ use std::error::Error;
 
 /// nRF DFU transport interface
 pub trait DfuTransport {
-    /// MTU of the BLE link
-    async fn mtu(&self) -> usize;
     /// Connect to the device with the given name
     async fn connect(&mut self, name: &str) -> Result<(), Box<dyn Error>>;
     /// Write without response
