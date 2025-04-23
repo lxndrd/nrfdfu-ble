@@ -173,22 +173,29 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
 
     let (max_size, offset, checksum) = target.select_object(Object::Data).await?;
     if offset != 0 || checksum != 0 {
-        unimplemented!("DFU resumption is not supported");
+        return Err("DFU resumption is not supported".into());
     }
     let mut checksum: u32 = 0;
     let mut offset: usize = 0;
-    for chunk in fw_pkt.chunks(max_size) {
+    while offset < fw_pkt.len() {
+        let end = std::cmp::min(fw_pkt.len(), offset + max_size);
+        let chunk = &fw_pkt[offset..end];
         target.create_object(Object::Data, chunk.len()).await?;
-        for shard in chunk.chunks(max_size / 4) {
-            checksum = crc32(shard, checksum);
-            offset += shard.len();
-            target.write_data(shard).await?;
-            target.verify_crc(offset, checksum).await?;
-            // TODO add progress callback
-            let percent = (offset * 100) / fw_pkt.len();
-            print!("Uploaded {}% ({}/{} bytes)\r", percent, offset, fw_pkt.len());
-            io::stdout().flush().unwrap();
+        target.write_data(chunk).await?;
+        let new_checksum = crc32(chunk, checksum);
+        let new_offset = offset + chunk.len();
+        if target.verify_crc(new_offset, new_checksum).await.is_err() {
+            println!("CRC error at offset {}, retrying...", offset);
+            // first chunk frequently fails on macOS, backoff seems to help
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
         }
+        checksum = new_checksum;
+        offset = new_offset;
+        // TODO add progress callback
+        let percent = (offset * 100) / fw_pkt.len();
+        print!("Uploaded {}% ({}/{} bytes)\r", percent, offset, fw_pkt.len());
+        io::stdout().flush().unwrap();
         target.execute().await?;
     }
     println!();
