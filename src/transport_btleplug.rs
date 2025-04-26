@@ -1,5 +1,6 @@
 use crate::transport::DfuTransport;
 
+use anyhow::{Result, anyhow};
 use btleplug::api::{
     BDAddr, Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
     WriteType,
@@ -7,11 +8,10 @@ use btleplug::api::{
 use btleplug::platform::Adapter;
 use btleplug::platform::Peripheral;
 use futures::stream::StreamExt;
-use std::error::Error;
 use std::io::Write;
 use std::str::FromStr;
 
-async fn find_peripheral<P>(central: &Adapter, predicate: P) -> Result<Peripheral, Box<dyn Error>>
+async fn find_peripheral<P>(central: &Adapter, predicate: P) -> Result<Peripheral>
 where
     P: Fn(PeripheralProperties) -> bool,
 {
@@ -28,7 +28,7 @@ where
             }
         }
     }
-    Err("Scanning stopped unexpectedly".into())
+    Err(anyhow!("Scanning stopped unexpectedly"))
 }
 
 fn print_peripheral_properties(properties: &PeripheralProperties) {
@@ -40,12 +40,12 @@ fn print_peripheral_properties(properties: &PeripheralProperties) {
 }
 
 #[cfg(target_os = "macos")]
-async fn find_peripheral_by_address(_central: &Adapter, _addr: &BDAddr) -> Result<Peripheral, Box<dyn Error>> {
-    Err("BLE MAC addresses are not supported on macOS".into())
+async fn find_peripheral_by_address(_central: &Adapter, _addr: &BDAddr) -> Result<Peripheral> {
+    Err(anyhow!("BLE MAC addresses are not supported on macOS"))
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn find_peripheral_by_address(central: &Adapter, addr: &BDAddr) -> Result<Peripheral, Box<dyn Error>> {
+async fn find_peripheral_by_address(central: &Adapter, addr: &BDAddr) -> Result<Peripheral> {
     println!("Searching for {} by address...", addr);
     find_peripheral(central, |props| {
         print_peripheral_properties(&props);
@@ -53,7 +53,7 @@ async fn find_peripheral_by_address(central: &Adapter, addr: &BDAddr) -> Result<
     })
     .await
 }
-async fn find_peripheral_by_name(central: &Adapter, name: &str) -> Result<Peripheral, Box<dyn Error>> {
+async fn find_peripheral_by_name(central: &Adapter, name: &str) -> Result<Peripheral> {
     println!("Searching for {} by name...", name);
     find_peripheral(central, |props| {
         print_peripheral_properties(&props);
@@ -73,19 +73,19 @@ impl DfuTransportBtleplug {
     fn peripheral(&self) -> &Peripheral {
         self.peripheral.as_ref().unwrap()
     }
-    fn characteristic(&self, uuid: uuid::Uuid) -> Result<Characteristic, Box<dyn Error>> {
+    fn characteristic(&self, uuid: uuid::Uuid) -> Result<Characteristic> {
         // TODO: keep a local char cache for faster lookup
         for char in self.peripheral().characteristics() {
             if uuid == char.uuid {
                 return Ok(char);
             }
         }
-        Err("characteristic not found".into())
+        Err(anyhow!("characteristic not found"))
     }
 }
 
 impl DfuTransport for DfuTransportBtleplug {
-    async fn connect(&mut self, name: &str) -> Result<(), Box<dyn Error>> {
+    async fn connect(&mut self, name: &str) -> Result<()> {
         let manager = btleplug::platform::Manager::new().await?;
         let adapters = manager.adapters().await?;
         let central = adapters.into_iter().next().unwrap();
@@ -104,12 +104,12 @@ impl DfuTransport for DfuTransportBtleplug {
         self.peripheral = Some(peripheral);
         Ok(())
     }
-    async fn subscribe(&self, char: uuid::Uuid) -> Result<(), Box<dyn Error>> {
+    async fn subscribe(&self, char: uuid::Uuid) -> Result<()> {
         let char = self.characteristic(char)?;
         self.peripheral().subscribe(&char).await?;
         Ok(())
     }
-    async fn write(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    async fn write(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<()> {
         let char = self.characteristic(char)?;
         // TODO: fix this once btleplug supports MTU discovery
         // default nRF DFU MTU is 244
@@ -121,7 +121,7 @@ impl DfuTransport for DfuTransportBtleplug {
         }
         Ok(())
     }
-    async fn request(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    async fn request(&self, char: uuid::Uuid, bytes: &[u8]) -> Result<Vec<u8>> {
         let mut notifications = self.peripheral().notifications().await.unwrap();
         let char = self.characteristic(char)?;
         self.peripheral().write(&char, bytes, WriteType::WithResponse).await?;

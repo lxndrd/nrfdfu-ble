@@ -33,7 +33,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let transport = transport_btleplug::DfuTransportBtleplug::new();
     if let Commands::Trigger {} = &args.command {

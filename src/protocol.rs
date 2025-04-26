@@ -1,7 +1,7 @@
 use crate::transport::DfuTransport;
 
+use anyhow::{Result, anyhow, ensure};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::timeout;
@@ -32,6 +32,7 @@ enum OpCode {
     HardwareVersion = 0x0A,
     FirmwareVersion = 0x0B,
     Abort = 0x0C,
+    Response = 0x60,
 }
 
 /// DFU Response codes
@@ -83,43 +84,37 @@ struct DfuTarget<T: DfuTransport> {
 }
 
 impl<T: DfuTransport> DfuTarget<T> {
-    fn verify_header(opcode: u8, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
-        if bytes.len() < 3 {
-            return Err("invalid response length".into());
-        }
-        if bytes[0] != 0x60 {
-            return Err("invalid response header".into());
-        }
-        if bytes[1] != opcode {
-            return Err("invalid response opcode".into());
-        }
+    fn verify_header(opcode: u8, bytes: &[u8]) -> Result<()> {
+        ensure!(bytes.len() >= 3, "invalid response length");
+        ensure!(bytes[0] == OpCode::Response as u8, "invalid response header");
+        ensure!(bytes[1] == opcode, "invalid response opcode");
         let result = ResponseCode::try_from(bytes[2])?;
         if result == ResponseCode::ExtError {
             let ext_error = ExtError::try_from(bytes[3])?;
-            return Err(format!("Dfu Target: {:?} ({:?})", ext_error, bytes).into());
+            anyhow::bail!(format!("Dfu Target: {:?}", ext_error));
         }
         if result != ResponseCode::Success {
-            return Err(format!("Dfu Target: {:?} ({:?})", result, bytes).into());
+            anyhow::bail!(format!("Dfu Target: {:?}", result));
         }
         Ok(())
     }
 
-    async fn write_data(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    async fn write_data(&self, bytes: &[u8]) -> Result<()> {
         let write = self.transport.write(dfu_uuids::DATA_PT, bytes);
         timeout(Duration::from_millis(500), write).await?
     }
 
-    async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         for _retry in 0..3 {
             let request = self.transport.request(dfu_uuids::CTRL_PT, bytes);
             if let Ok(res) = timeout(Duration::from_millis(500), request).await {
                 return res;
             }
         }
-        Err("No response after multiple tries".into())
+        Err(anyhow!("No response after multiple tries"))
     }
 
-    async fn set_prn(&self, value: u32) -> Result<(), Box<dyn Error>> {
+    async fn set_prn(&self, value: u32) -> Result<()> {
         let opcode: u8 = OpCode::ReceiptNotifSet.into();
         let mut payload: Vec<u8> = vec![opcode];
         payload.extend_from_slice(&value.to_le_bytes());
@@ -128,7 +123,7 @@ impl<T: DfuTransport> DfuTarget<T> {
         Ok(())
     }
 
-    async fn get_crc(&self) -> Result<(usize, u32), Box<dyn Error>> {
+    async fn get_crc(&self) -> Result<(usize, u32)> {
         let opcode: u8 = OpCode::CrcGet.into();
         let response = self.request_ctrl(&[opcode]).await?;
         Self::verify_header(opcode, &response)?;
@@ -137,7 +132,7 @@ impl<T: DfuTransport> DfuTarget<T> {
         Ok((offset as usize, checksum))
     }
 
-    async fn select_object(&self, obj_type: Object) -> Result<(usize, usize, u32), Box<dyn Error>> {
+    async fn select_object(&self, obj_type: Object) -> Result<(usize, usize, u32)> {
         let opcode: u8 = OpCode::ObjectSelect.into();
         let arg: u8 = obj_type.into();
         let response = self.request_ctrl(&[opcode, arg]).await?;
@@ -148,7 +143,7 @@ impl<T: DfuTransport> DfuTarget<T> {
         Ok((max_size as usize, offset as usize, checksum))
     }
 
-    async fn create_object(&self, obj_type: Object, len: usize) -> Result<(), Box<dyn Error>> {
+    async fn create_object(&self, obj_type: Object, len: usize) -> Result<()> {
         let opcode: u8 = OpCode::ObjectCreate.into();
         let mut payload: Vec<u8> = vec![opcode, obj_type.into()];
         payload.extend_from_slice(&(len as u32).to_le_bytes());
@@ -157,20 +152,20 @@ impl<T: DfuTransport> DfuTarget<T> {
         Ok(())
     }
 
-    async fn execute(&self) -> Result<(), Box<dyn Error>> {
+    async fn execute(&self) -> Result<()> {
         let opcode: u8 = OpCode::ObjectExecute.into();
         let response = self.request_ctrl(&[opcode]).await?;
         Self::verify_header(opcode, &response)?;
         Ok(())
     }
 
-    async fn verify_crc(&self, offset: usize, checksum: u32) -> Result<(), Box<dyn Error>> {
+    async fn verify_crc(&self, offset: usize, checksum: u32) -> Result<()> {
         let (off, crc) = self.get_crc().await?;
         if offset != off {
-            return Err("Length mismatch".into());
+            anyhow::bail!("Length mismatch");
         }
         if checksum != crc {
-            return Err("CRC mismatch".into());
+            anyhow::bail!("CRC mismatch");
         }
         Ok(())
     }
@@ -178,12 +173,7 @@ impl<T: DfuTransport> DfuTarget<T> {
 
 /// Run DFU procedure as specified in
 /// [DFU Protocol](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html)
-pub async fn dfu_run<T: DfuTransport>(
-    transport: T,
-    name: &str,
-    init_pkt: &[u8],
-    fw_pkt: &[u8],
-) -> Result<(), Box<dyn Error>> {
+pub async fn dfu_run<T: DfuTransport>(transport: T, name: &str, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<()> {
     let mut target = DfuTarget { transport };
     target.transport.connect(name).await?;
     target.transport.subscribe(dfu_uuids::CTRL_PT).await?;
@@ -199,7 +189,7 @@ pub async fn dfu_run<T: DfuTransport>(
 
     let (max_size, offset, checksum) = target.select_object(Object::Data).await?;
     if offset != 0 || checksum != 0 {
-        return Err("DFU resumption is not supported".into());
+        anyhow::bail!("DFU resumption is not supported");
     }
     let mut checksum: u32 = 0;
     let mut offset: usize = 0;
@@ -231,14 +221,14 @@ pub async fn dfu_run<T: DfuTransport>(
 }
 
 /// Trigger DFU mode using the Buttonless DFU service
-pub async fn dfu_trigger<T: DfuTransport>(mut transport: T, target: &str) -> Result<(), Box<dyn Error>> {
+pub async fn dfu_trigger<T: DfuTransport>(mut transport: T, target: &str) -> Result<()> {
     transport.connect(target).await?;
     transport.subscribe(dfu_uuids::BTTNLSS).await?;
     let res = transport.request(dfu_uuids::BTTNLSS, &[0x01]).await?;
     if res.eq(&[0x20, 0x01, 0x01]) {
         Ok(())
     } else {
-        Err("DFU trigger failed".into())
+        Err(anyhow!("DFU trigger failed"))
     }
 }
 
