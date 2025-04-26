@@ -58,11 +58,11 @@ fn crc32(buf: &[u8], init: u32) -> u32 {
 
 // More requests are available when `NRF_DFU_PROTOCOL_REDUCED` is not defined
 // in `nRF5_SDK_17.1.0_ddde560/components/libraries/bootloader/dfu/nrf_dfu_req_handler.c`
-struct DfuTarget<'a, T: DfuTransport> {
-    transport: &'a T,
+struct DfuTarget<T: DfuTransport> {
+    transport: T,
 }
 
-impl<T: DfuTransport> DfuTarget<'_, T> {
+impl<T: DfuTransport> DfuTarget<T> {
     fn verify_header(opcode: u8, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         if bytes.len() < 3 {
             return Err("invalid response length".into());
@@ -154,12 +154,17 @@ impl<T: DfuTransport> DfuTarget<'_, T> {
 
 /// Run DFU procedure as specified in
 /// [DFU Protocol](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html)
-pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<(), Box<dyn Error>> {
-    let start = std::time::Instant::now();
-    // TODO: put timeouts on transport operations
-    let target = DfuTarget { transport };
+pub async fn dfu_run<T: DfuTransport>(
+    transport: T,
+    name: &str,
+    init_pkt: &[u8],
+    fw_pkt: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let mut target = DfuTarget { transport };
+    target.transport.connect(name).await?;
     target.transport.subscribe(dfu_uuids::CTRL_PT).await?;
 
+    let start = std::time::Instant::now();
     // Disable packet receipt notifications
     target.set_prn(0).await?;
 
@@ -202,7 +207,8 @@ pub async fn dfu_run(transport: &impl DfuTransport, init_pkt: &[u8], fw_pkt: &[u
 }
 
 /// Trigger DFU mode using the Buttonless DFU service
-pub async fn dfu_trigger(transport: &impl DfuTransport) -> Result<(), Box<dyn Error>> {
+pub async fn dfu_trigger<T: DfuTransport>(mut transport: T, target: &str) -> Result<(), Box<dyn Error>> {
+    transport.connect(target).await?;
     transport.subscribe(dfu_uuids::BTTNLSS).await?;
     let res = transport.request(dfu_uuids::BTTNLSS, &[0x01]).await?;
     if res.eq(&[0x20, 0x01, 0x01]) {

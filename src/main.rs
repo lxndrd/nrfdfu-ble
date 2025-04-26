@@ -1,11 +1,9 @@
 mod package;
 mod protocol;
 mod transport;
-// TODO: more efficient linux-only transport based on `bluer`
 mod transport_btleplug;
 
 use clap::{Parser, Subcommand};
-use transport::DfuTransport;
 
 /// Update firmware on nRF BLE DFU targets
 #[derive(clap::Parser)]
@@ -37,17 +35,15 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut transport = &mut transport_btleplug::DfuTransportBtleplug::new();
-    transport.connect(&args.name).await?;
-    match &args.command {
-        Commands::Trigger {} => protocol::dfu_trigger(&transport).await,
-        Commands::App { pkg } => {
-            let (init_pkt, fw_pkt) = package::extract_application(pkg)?;
-            protocol::dfu_run(&transport, &init_pkt, &fw_pkt).await
-        }
-        Commands::Sdbl { pkg } => {
-            let (init_pkt, fw_pkt) = package::extract_softdevice_bootloader(pkg)?;
-            protocol::dfu_run(&transport, &init_pkt, &fw_pkt).await
-        }
+    let transport = transport_btleplug::DfuTransportBtleplug::new();
+    if let Commands::Trigger {} = &args.command {
+        protocol::dfu_trigger(transport, &args.name).await
+    } else {
+        let (init_pkt, fw_pkt) = match &args.command {
+            Commands::App { pkg } => package::extract_application(pkg)?,
+            Commands::Sdbl { pkg } => package::extract_softdevice_bootloader(pkg)?,
+            _ => unreachable!(),
+        };
+        protocol::dfu_run(transport, &args.name, &init_pkt, &fw_pkt).await
     }
 }

@@ -84,7 +84,7 @@ impl DfuTransportBtleplug {
     }
 }
 
-impl DfuTransport for &mut DfuTransportBtleplug {
+impl DfuTransport for DfuTransportBtleplug {
     async fn connect(&mut self, name: &str) -> Result<(), Box<dyn Error>> {
         let manager = btleplug::platform::Manager::new().await?;
         let adapters = manager.adapters().await?;
