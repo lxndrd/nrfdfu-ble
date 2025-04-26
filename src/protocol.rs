@@ -50,6 +50,26 @@ enum ResponseCode {
     ExtError = 0x0B,
 }
 
+/// DFU Extended Error codes
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
+enum ExtError {
+    NoError = 0x00,
+    InvalidErrorCode = 0x01,
+    WrongCommandFormat = 0x02,
+    UnknownCommand = 0x03,
+    InitCommandInvalid = 0x04,
+    FwVersionFailure = 0x05,
+    HwVersionFailure = 0x06,
+    SdVersionFailure = 0x07,
+    SignatureMissing = 0x08,
+    WrongHashType = 0x09,
+    HashFailed = 0x0A,
+    WrongSignatureType = 0x0B,
+    VerificationFailed = 0x0C,
+    InsufficientSpace = 0x0D,
+}
+
 fn crc32(buf: &[u8], init: u32) -> u32 {
     let mut h = crc32fast::Hasher::new_with_initial(init);
     h.update(buf);
@@ -74,6 +94,10 @@ impl<T: DfuTransport> DfuTarget<T> {
             return Err("invalid response opcode".into());
         }
         let result = ResponseCode::try_from(bytes[2])?;
+        if result == ResponseCode::ExtError {
+            let ext_error = ExtError::try_from(bytes[3])?;
+            return Err(format!("Dfu Target: {:?} ({:?})", ext_error, bytes).into());
+        }
         if result != ResponseCode::Success {
             return Err(format!("Dfu Target: {:?} ({:?})", result, bytes).into());
         }
