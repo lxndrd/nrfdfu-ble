@@ -826,6 +826,7 @@ dependencies = [
  "futures",
  "num_enum",
  "serde_json",
+ "thiserror 2.0.12",
  "tokio",
  "uuid",
  "zip",

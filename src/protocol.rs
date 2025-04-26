@@ -1,9 +1,10 @@
 use crate::transport::DfuTransport;
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::{self, Write};
 use std::time::Duration;
+use thiserror::Error;
 use tokio::time::timeout;
 
 // As defined in nRF5_SDK_17.1.0_ddde560/components/libraries/bootloader/dfu/nrf_dfu_req_handler.h
@@ -17,7 +18,7 @@ enum Object {
 }
 
 /// DFU Command opcodes
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 enum OpCode {
     ProtocolVersion = 0x00,
@@ -36,38 +37,62 @@ enum OpCode {
 }
 
 /// DFU Response codes
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Error, Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 enum ResponseCode {
+    #[error("invalid opcode")]
     Invalid = 0x00,
+    #[error("success (not an error)")]
     Success = 0x01,
+    #[error("opcode not supported")]
     OpCodeNotSupported = 0x02,
+    #[error("invalid parameter")]
     InvalidParameter = 0x03,
+    #[error("not enough memory for the data object")]
     InsufficientResources = 0x04,
+    #[error("invalid data object")]
     InvalidObject = 0x05,
+    #[error("invalid object type")]
     UnsupportedType = 0x07,
+    #[error("operation not permitted")]
     OperationNotPermitted = 0x08,
+    #[error("operation failed")]
     OperationFailed = 0x0A,
+    #[error("extended error")]
     ExtError = 0x0B,
 }
 
 /// DFU Extended Error codes
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Error, Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 enum ExtError {
+    #[error("no extended error (bad implementation)")]
     NoError = 0x00,
+    #[error("invalid error code")]
     InvalidErrorCode = 0x01,
+    #[error("wrong command format")]
     WrongCommandFormat = 0x02,
+    #[error("unknown command")]
     UnknownCommand = 0x03,
+    #[error("invalid init command")]
     InitCommandInvalid = 0x04,
+    #[error("firmware version is too low")]
     FwVersionFailure = 0x05,
+    #[error("hardware version mismatch")]
     HwVersionFailure = 0x06,
+    #[error("required softdevice version mismatch")]
     SdVersionFailure = 0x07,
+    #[error("missing signature")]
     SignatureMissing = 0x08,
+    #[error("wrong hash type")]
     WrongHashType = 0x09,
+    #[error("hash calculation failed")]
     HashFailed = 0x0A,
+    #[error("wrong signature type")]
     WrongSignatureType = 0x0B,
+    #[error("hash verification failed")]
     VerificationFailed = 0x0C,
+    #[error("insufficient space")]
     InsufficientSpace = 0x0D,
 }
 
@@ -84,19 +109,22 @@ struct DfuTarget<T: DfuTransport> {
 }
 
 impl<T: DfuTransport> DfuTarget<T> {
-    fn verify_header(opcode: u8, bytes: &[u8]) -> Result<()> {
-        ensure!(bytes.len() >= 3, "invalid response length");
-        ensure!(bytes[0] == OpCode::Response as u8, "invalid response header");
-        ensure!(bytes[1] == opcode, "invalid response opcode");
-        let result = ResponseCode::try_from(bytes[2])?;
-        if result == ResponseCode::ExtError {
-            let ext_error = ExtError::try_from(bytes[3])?;
-            anyhow::bail!(format!("Dfu Target: {:?}", ext_error));
+    fn verify_response(req_opcode: OpCode, bytes: &[u8]) -> Result<()> {
+        fn inner(req_opcode: OpCode, bytes: &[u8]) -> Result<()> {
+            anyhow::ensure!(bytes.len() >= 3, "invalid response, too short ({:x?})", bytes);
+            anyhow::ensure!(bytes[0] == OpCode::Response as u8, "invalid response ({:x?})", bytes);
+            anyhow::ensure!(bytes[1] == req_opcode as u8, "invalid request opcode ({:x?})", bytes);
+            let result = ResponseCode::try_from(bytes[2])?;
+            if result == ResponseCode::ExtError {
+                let ext_error = ExtError::try_from(bytes[3])?;
+                anyhow::bail!(ext_error);
+            }
+            if result != ResponseCode::Success {
+                anyhow::bail!(result);
+            }
+            anyhow::Ok(())
         }
-        if result != ResponseCode::Success {
-            anyhow::bail!(format!("Dfu Target: {:?}", result));
-        }
-        Ok(())
+        inner(req_opcode, bytes).context(format!("{:?} failed", req_opcode))
     }
 
     async fn write_data(&self, bytes: &[u8]) -> Result<()> {
@@ -115,28 +143,28 @@ impl<T: DfuTransport> DfuTarget<T> {
     }
 
     async fn set_prn(&self, value: u32) -> Result<()> {
-        let opcode: u8 = OpCode::ReceiptNotifSet.into();
-        let mut payload: Vec<u8> = vec![opcode];
+        let opcode = OpCode::ReceiptNotifSet;
+        let mut payload: Vec<u8> = vec![opcode as u8];
         payload.extend_from_slice(&value.to_le_bytes());
         let response = self.request_ctrl(&payload).await?;
-        Self::verify_header(opcode, &response)?;
+        Self::verify_response(opcode, &response)?;
         Ok(())
     }
 
     async fn get_crc(&self) -> Result<(usize, u32)> {
-        let opcode: u8 = OpCode::CrcGet.into();
-        let response = self.request_ctrl(&[opcode]).await?;
-        Self::verify_header(opcode, &response)?;
+        let opcode = OpCode::CrcGet;
+        let response = self.request_ctrl(&[opcode as u8]).await?;
+        Self::verify_response(opcode, &response)?;
         let offset = u32::from_le_bytes(response[3..7].try_into()?);
         let checksum = u32::from_le_bytes(response[7..11].try_into()?);
         Ok((offset as usize, checksum))
     }
 
     async fn select_object(&self, obj_type: Object) -> Result<(usize, usize, u32)> {
-        let opcode: u8 = OpCode::ObjectSelect.into();
+        let opcode = OpCode::ObjectSelect;
         let arg: u8 = obj_type.into();
-        let response = self.request_ctrl(&[opcode, arg]).await?;
-        Self::verify_header(opcode, &response)?;
+        let response = self.request_ctrl(&[opcode as u8, arg]).await?;
+        Self::verify_response(opcode, &response)?;
         let max_size = u32::from_le_bytes(response[3..7].try_into()?);
         let offset = u32::from_le_bytes(response[7..11].try_into()?);
         let checksum = u32::from_le_bytes(response[11..15].try_into()?);
@@ -144,29 +172,25 @@ impl<T: DfuTransport> DfuTarget<T> {
     }
 
     async fn create_object(&self, obj_type: Object, len: usize) -> Result<()> {
-        let opcode: u8 = OpCode::ObjectCreate.into();
-        let mut payload: Vec<u8> = vec![opcode, obj_type.into()];
+        let opcode = OpCode::ObjectCreate;
+        let mut payload: Vec<u8> = vec![opcode as u8, obj_type.into()];
         payload.extend_from_slice(&(len as u32).to_le_bytes());
         let response = self.request_ctrl(&payload).await?;
-        Self::verify_header(opcode, &response)?;
+        Self::verify_response(opcode, &response)?;
         Ok(())
     }
 
     async fn execute(&self) -> Result<()> {
-        let opcode: u8 = OpCode::ObjectExecute.into();
-        let response = self.request_ctrl(&[opcode]).await?;
-        Self::verify_header(opcode, &response)?;
+        let opcode = OpCode::ObjectExecute;
+        let response = self.request_ctrl(&[opcode as u8]).await?;
+        Self::verify_response(opcode, &response)?;
         Ok(())
     }
 
-    async fn verify_crc(&self, offset: usize, checksum: u32) -> Result<()> {
-        let (off, crc) = self.get_crc().await?;
-        if offset != off {
-            anyhow::bail!("Length mismatch");
-        }
-        if checksum != crc {
-            anyhow::bail!("CRC mismatch");
-        }
+    async fn verify_crc(&self, expected_offset: usize, expected_crc: u32) -> Result<()> {
+        let (offset, crc) = self.get_crc().await?;
+        anyhow::ensure!(expected_offset == offset, "offset mismatch");
+        anyhow::ensure!(expected_crc == crc, "CRC mismatch");
         Ok(())
     }
 }
@@ -182,6 +206,7 @@ pub async fn dfu_run<T: DfuTransport>(transport: T, name: &str, init_pkt: &[u8],
     // Disable packet receipt notifications
     target.set_prn(0).await?;
 
+    //let init_pkt = fw_pkt;
     target.create_object(Object::Command, init_pkt.len()).await?;
     target.write_data(init_pkt).await?;
     target.verify_crc(init_pkt.len(), crc32(init_pkt, 0)).await?;
@@ -225,11 +250,8 @@ pub async fn dfu_trigger<T: DfuTransport>(mut transport: T, target: &str) -> Res
     transport.connect(target).await?;
     transport.subscribe(dfu_uuids::BTTNLSS).await?;
     let res = transport.request(dfu_uuids::BTTNLSS, &[0x01]).await?;
-    if res.eq(&[0x20, 0x01, 0x01]) {
-        Ok(())
-    } else {
-        Err(anyhow!("DFU trigger failed"))
-    }
+    anyhow::ensure!(res.eq(&[0x20, 0x01, 0x01]), "DFU trigger failed");
+    Ok(())
 }
 
 /// nRF DFU service & characteristic UUIDs
