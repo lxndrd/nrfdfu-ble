@@ -5,6 +5,14 @@ pub fn extract_application(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     extract(path, "application")
 }
 
+pub fn extract_bootloader(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    extract(path, "bootloader")
+}
+
+pub fn extract_softdevice(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    extract(path, "softdevice")
+}
+
 pub fn extract_softdevice_bootloader(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     extract(path, "softdevice_bootloader")
 }

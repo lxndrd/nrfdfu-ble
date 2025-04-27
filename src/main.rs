@@ -9,8 +9,8 @@ use clap::{Parser, Subcommand};
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// BLE DFU target name
-    name: String,
+    /// BLE DFU target name or address
+    target: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -20,8 +20,18 @@ struct Args {
 enum Commands {
     /// Start DFU mode using Buttonless DFU Service
     Trigger {},
-    /// Update application only
+    /// Update application
     App {
+        /// DFU package path
+        pkg: String,
+    },
+    /// Update bootloader
+    Bl {
+        /// DFU package path
+        pkg: String,
+    },
+    /// Update SoftDevice
+    Sd {
         /// DFU package path
         pkg: String,
     },
@@ -37,13 +47,15 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let transport = transport_btleplug::DfuTransportBtleplug::new();
     if let Commands::Trigger {} = &args.command {
-        protocol::dfu_trigger(transport, &args.name).await
+        protocol::dfu_trigger(transport, &args.target).await
     } else {
         let (init_pkt, fw_pkt) = match &args.command {
             Commands::App { pkg } => package::extract_application(pkg)?,
+            Commands::Bl { pkg } => package::extract_bootloader(pkg)?,
+            Commands::Sd { pkg } => package::extract_softdevice(pkg)?,
             Commands::Sdbl { pkg } => package::extract_softdevice_bootloader(pkg)?,
             _ => unreachable!(),
         };
-        protocol::dfu_run(transport, &args.name, &init_pkt, &fw_pkt).await
+        protocol::dfu_run(transport, &args.target, &init_pkt, &fw_pkt).await
     }
 }
