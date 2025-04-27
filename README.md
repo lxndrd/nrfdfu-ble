@@ -1,7 +1,5 @@
 # nRF BLE firmware update utility
 
-**WORK IN PROGRESS:** DFU functionality works, but error messages are cryptic and there are no retries
-
 Firmware update utility for BLE devices that support the
 [nRF DFU](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html) protocol.
 
@@ -23,3 +21,10 @@ nrfdfu-ble "BLE Device XYZ" trigger && \
 nrfdfu-ble DfuTarget app ./path/to/fw-pkg.zip
 ```
 By default the bootloader advertises the device as `DfuTarget`.
+
+It is also possible to update the bootloader, the softdevice, or both, with a combined image:
+```console
+nrfdfu-ble DfuTarget sd ./path/to/fw-pkg.zip
+nrfdfu-ble DfuTarget bl ./path/to/fw-pkg.zip
+nrfdfu-ble DfuTarget sdbl ./path/to/fw-pkg.zip
+```
