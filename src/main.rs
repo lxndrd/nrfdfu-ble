@@ -45,9 +45,9 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let transport = transport_btleplug::DfuTransportBtleplug::new();
+    let transport_manager = transport_btleplug::DfuTransportManagerBtleplug::new().await?;
     if let Commands::Trigger {} = &args.command {
-        protocol::dfu_trigger(transport, &args.target).await
+        protocol::dfu_trigger(transport_manager, &args.target).await
     } else {
         let (init_pkt, fw_pkt) = match &args.command {
             Commands::App { pkg } => package::extract_application(pkg)?,
@@ -56,6 +56,6 @@ async fn main() -> anyhow::Result<()> {
             Commands::Sdbl { pkg } => package::extract_softdevice_bootloader(pkg)?,
             _ => unreachable!(),
         };
-        protocol::dfu_run(transport, &args.target, &init_pkt, &fw_pkt).await
+        protocol::dfu_run(transport_manager, &args.target, &init_pkt, &fw_pkt).await
     }
 }

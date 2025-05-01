@@ -1,4 +1,5 @@
 use crate::transport::DfuTransport;
+use crate::transport::DfuTransportManager;
 
 use anyhow::{Context, Result, anyhow};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -197,16 +198,15 @@ impl<T: DfuTransport> DfuTarget<T> {
 
 /// Run DFU procedure as specified in
 /// [DFU Protocol](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html)
-pub async fn dfu_run<T: DfuTransport>(transport: T, name: &str, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<()> {
-    let mut target = DfuTarget { transport };
-    target.transport.connect(name).await?;
+pub async fn dfu_run<T: DfuTransportManager>(manager: T, name: &str, init_pkt: &[u8], fw_pkt: &[u8]) -> Result<()> {
+    let transport = manager.connect(name).await?;
+    let target = DfuTarget { transport };
     target.transport.subscribe(dfu_uuids::CTRL_PT).await?;
 
     let start = std::time::Instant::now();
     // Disable packet receipt notifications
     target.set_prn(0).await?;
 
-    //let init_pkt = fw_pkt;
     target.create_object(Object::Command, init_pkt.len()).await?;
     target.write_data(init_pkt).await?;
     target.verify_crc(init_pkt.len(), crc32(init_pkt, 0)).await?;
@@ -246,8 +246,8 @@ pub async fn dfu_run<T: DfuTransport>(transport: T, name: &str, init_pkt: &[u8],
 }
 
 /// Trigger DFU mode using the Buttonless DFU service
-pub async fn dfu_trigger<T: DfuTransport>(mut transport: T, target: &str) -> Result<()> {
-    transport.connect(target).await?;
+pub async fn dfu_trigger<T: DfuTransportManager>(manager: T, target: &str) -> Result<()> {
+    let transport = manager.connect(target).await?;
     transport.subscribe(dfu_uuids::BTTNLSS).await?;
     let res = transport.request(dfu_uuids::BTTNLSS, &[0x01]).await?;
     anyhow::ensure!(res.eq(&[0x20, 0x01, 0x01]), "DFU trigger failed");
