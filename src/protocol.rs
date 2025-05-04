@@ -2,8 +2,8 @@ use crate::transport::DfuTransport;
 use crate::transport::DfuTransportManager;
 
 use anyhow::{Context, Result, anyhow};
+use indicatif::{ProgressBar, ProgressStyle};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::io::{self, Write};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -203,7 +203,15 @@ pub async fn dfu_run<T: DfuTransportManager>(manager: T, name: &str, init_pkt: &
     let target = DfuTarget { transport };
     target.transport.subscribe(dfu_uuids::CTRL_PT).await?;
 
-    let start = std::time::Instant::now();
+    let pb = ProgressBar::new(fw_pkt.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template("{msg} [{elapsed}] [{wide_bar:.blue/white}] {bytes}/{total_bytes} ({bytes_per_sec})")
+            .unwrap()
+            .progress_chars("#> "),
+    );
+
+    pb.set_message("Uploading...");
+
     // Disable packet receipt notifications
     target.set_prn(0).await?;
 
@@ -226,21 +234,17 @@ pub async fn dfu_run<T: DfuTransportManager>(manager: T, name: &str, init_pkt: &
         let new_checksum = crc32(chunk, checksum);
         let new_offset = offset + chunk.len();
         if target.verify_crc(new_offset, new_checksum).await.is_err() {
-            println!("CRC error at offset {}, retrying...", offset);
+            pb.println(format!("CRC error at offset {}, retrying...", offset));
             // first chunk frequently fails on macOS, backoff seems to help
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
         checksum = new_checksum;
         offset = new_offset;
-        // TODO add progress callback
-        let percent = (offset * 100) / fw_pkt.len();
-        print!("Uploaded {}% ({}/{} bytes)\r", percent, offset, fw_pkt.len());
-        io::stdout().flush().unwrap();
+        pb.set_position(offset as u64);
         target.execute().await?;
     }
-    println!();
-    println!("DFU completed in {:.2} seconds", start.elapsed().as_secs_f32());
+    pb.finish_with_message("Done");
 
     Ok(())
 }

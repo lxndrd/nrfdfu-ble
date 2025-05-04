@@ -7,7 +7,7 @@ use btleplug::api::{
 use btleplug::platform::Adapter;
 use btleplug::platform::Peripheral;
 use futures::stream::StreamExt;
-use std::io::Write;
+use indicatif::ProgressBar;
 use std::str::FromStr;
 
 pub struct DfuTransportManagerBtleplug {
@@ -45,36 +45,35 @@ impl DfuTransportManagerBtleplug {
         Err(anyhow!("Scanning stopped unexpectedly"))
     }
 
-    fn print_peripheral_properties(properties: &PeripheralProperties) {
+    fn format_peripheral_properties(properties: &PeripheralProperties) -> String {
         let name = properties.local_name.as_deref().unwrap_or("None");
         let addr = properties.address;
         let rssi = properties.rssi.unwrap_or(-99);
-        print!("rssi: {}, address: {}, name: {: <32}\r", rssi, addr, name);
-        std::io::stdout().flush().unwrap();
+        format!("rssi: {}, address: {}, name: {}", rssi, addr, name)
     }
 
     #[cfg(target_os = "macos")]
-    async fn find_peripheral_by_address(&self, _addr: &BDAddr) -> Result<Peripheral> {
+    async fn find_peripheral_by_address(&self, _addr: &BDAddr, _pb: &ProgressBar) -> Result<Peripheral> {
         Err(anyhow!("BLE MAC addresses are not supported on macOS"))
     }
 
     #[cfg(not(target_os = "macos"))]
-    async fn find_peripheral_by_address(&self, addr: &BDAddr) -> Result<Peripheral> {
-        println!("Searching for {} by address...", addr);
+    async fn find_peripheral_by_address(&self, addr: &BDAddr, pb: &ProgressBar) -> Result<Peripheral> {
         self.find_peripheral(|props| {
-            Self::print_peripheral_properties(&props);
+            pb.set_message(Self::format_peripheral_properties(&props));
             props.address_type.is_some() && props.address.eq(addr)
         })
         .await
     }
 
-    async fn find_peripheral_by_name(&self, name: &str) -> Result<Peripheral> {
-        println!("Searching for {} by name...", name);
-        self.find_peripheral(|props| {
-            Self::print_peripheral_properties(&props);
-            props.local_name.is_some() && props.local_name.unwrap().eq(name)
-        })
-        .await
+    async fn find_peripheral_by_name(&self, name: &str, pb: &ProgressBar) -> Result<Peripheral> {
+        let peripheral = self
+            .find_peripheral(|props| {
+                pb.set_message(Self::format_peripheral_properties(&props));
+                props.local_name.is_some() && props.local_name.unwrap().eq(name)
+            })
+            .await?;
+        Ok(peripheral)
     }
 }
 
@@ -83,16 +82,20 @@ impl DfuTransportManager for DfuTransportManagerBtleplug {
 
     async fn connect(&self, target: &str) -> anyhow::Result<Self::Transport> {
         let peripheral;
+        let pb = ProgressBar::new_spinner();
+        pb.enable_steady_tick(std::time::Duration::from_millis(64));
         if let Ok(addr) = BDAddr::from_str(target) {
-            peripheral = self.find_peripheral_by_address(&addr).await?;
+            pb.println(format!("Searching for `{}` by address...", target));
+            peripheral = self.find_peripheral_by_address(&addr, &pb).await?;
         } else {
-            peripheral = self.find_peripheral_by_name(target).await?;
+            pb.println(format!("Searching for `{}` by name...", target));
+            peripheral = self.find_peripheral_by_name(target, &pb).await?;
         }
-        println!();
 
         peripheral.connect().await.context("Failed to establish a connection")?;
         peripheral.discover_services().await.context("Service discovery failed")?;
 
+        pb.finish();
         Ok(DfuTransportBtleplug { peripheral })
     }
 }
