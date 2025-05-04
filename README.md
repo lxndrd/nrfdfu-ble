@@ -1,10 +1,12 @@
-# nRF BLE firmware update utility
+# Cross-platform nRF BLE firmware update utility
 
-Firmware update utility for BLE devices that support the
-[nRF DFU](https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html) protocol.
+Firmware update utility for BLE devices that support the [nRF DFU][1] protocol.
 
-An alternative to the official  [nrfutil](https://infocenter.nordicsemi.com/topic/ug_nrfutil/UG/nrfutil/nrfutil_dfu_ble.html)
-which needs a special USB device connected to the host machine to run a BLE update.
+An alternative to the official [nrfutil][2], which requires an nRF5 devkit
+connected to the host machine in order to perform a BLE update.
+
+[1]: https://infocenter.nordicsemi.com/topic/sdk_nrf5_v17.1.0/lib_dfu_transport_ble.html
+[2]: https://docs.nordicsemi.com/bundle/nrfutil/page/nrfutil-nrf5sdk-tools/guides/dfu_performing.html#dfu-over-bluetooth-low-energy
 
 ## Usage
 
