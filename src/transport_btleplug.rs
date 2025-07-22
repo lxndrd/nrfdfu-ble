@@ -2,7 +2,8 @@ use crate::transport::{DfuTransport, DfuTransportManager};
 
 use anyhow::{Context, Result, anyhow};
 use btleplug::api::{
-    BDAddr, Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter, WriteType,
+    BDAddr, Central, CentralEvent, CentralState, Characteristic, Manager as _, Peripheral as _, PeripheralProperties,
+    ScanFilter, WriteType,
 };
 use btleplug::platform::Adapter;
 use btleplug::platform::Peripheral;
@@ -18,11 +19,17 @@ impl DfuTransportManagerBtleplug {
     pub async fn new() -> anyhow::Result<Self> {
         let manager = btleplug::platform::Manager::new().await?;
         let adapters = manager.adapters().await?;
-        if let Some(adapter) = adapters.into_iter().next() {
-            Ok(DfuTransportManagerBtleplug { adapter })
-        } else {
-            Err(anyhow!("No Bluetooth adapter found"))
+        if adapters.is_empty() {
+            return Err(anyhow!("No Bluetooth adapter found"));
         }
+
+        for adapter in adapters {
+            if adapter.adapter_state().await? == CentralState::PoweredOn {
+                return Ok(DfuTransportManagerBtleplug { adapter });
+            }
+        }
+
+        Err(anyhow!("All Bluetooth adapters are powered off"))
     }
 
     async fn find_peripheral<P>(&self, predicate: P) -> Result<Peripheral>
