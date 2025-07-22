@@ -136,7 +136,7 @@ impl<T: DfuTransport> DfuTarget<T> {
     async fn request_ctrl(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         for _retry in 0..3 {
             let request = self.transport.request(dfu_uuids::CTRL_PT, bytes);
-            if let Ok(res) = timeout(Duration::from_millis(500), request).await {
+            if let Ok(res) = timeout(Duration::from_millis(1000), request).await {
                 return res;
             }
         }
@@ -233,8 +233,8 @@ pub async fn dfu_run<T: DfuTransportManager>(manager: T, name: &str, init_pkt: &
         target.write_data(chunk).await?;
         let new_checksum = crc32(chunk, checksum);
         let new_offset = offset + chunk.len();
-        if target.verify_crc(new_offset, new_checksum).await.is_err() {
-            pb.println(format!("CRC error at offset {}, retrying...", offset));
+        if let Err(e) = target.verify_crc(new_offset, new_checksum).await {
+            pb.println(format!("Error `{}` at offset {}, retrying...", e, offset));
             // first chunk frequently fails on macOS, backoff seems to help
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
